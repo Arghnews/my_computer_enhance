@@ -66,21 +66,64 @@ std::string process_mov_reg_reg(const std::span<uint8_t> data, size_t& i)
     const uint8_t mod_byte = val1 >> 6U; // Size 2, reg mode/memory displacement length
     const uint8_t reg_byte = (val1 & 0b00111000) >> 3U; // Size 3, reg operand/extension of opcode
     const uint8_t rm_byte = val1 & 0b00000111; // Size 3, reg operand/registers in ea calc
+    DEBUG_ASSERT(mod_byte < 4);
+    DEBUG_ASSERT(reg_byte < 8);
+    DEBUG_ASSERT(rm_byte < 8);
 
-//  std::cout << std::bitset<8>{val} << "\n";
-    const bool mod_mode_reg_reg = mod_byte == 0b11; // Register mode
-    if (!mod_mode_reg_reg)
+    if (mod_byte == 0)
     {
-        return "";
+        // mod_byte == 0 -> memory mode, operands in memory
+        std::string_view reg1;
+        switch (rm_byte)
+        {
+            case 0: { reg1 = "[bx + si]"; break; }
+            case 1: { reg1 = "[bx + di]"; break; }
+            case 2: { reg1 = "[bp + si]"; break; }
+            case 3: { reg1 = "[bp + di]"; break; }
+            case 4: { reg1 = "[si]"; break; }
+            case 5: { reg1 = "[di]"; break; }
+            case 6: { break; }
+            case 7: { reg1 = "[bx]"; break; }
+        }
+        std::string_view reg0 = reg_field_to_reg_name(w_bit, reg_byte);
+        if ( rm_byte == 6 ) // DIRECT_ADDRESS
+        {
+            const uint16_t val2 = data[3] << 8 | data[2];
+            return d_bit ? fmt::format("MOV {}, {}", reg0, val2) : fmt::format("MOV {}, {}", val2, reg0);
+        }
+        if (!d_bit) { std::swap(reg0, reg1); }
+        i += 2;
+        return fmt::format("MOV {}, {}", reg0, reg1);
     }
+    else if (mod_byte == 1 || mod_byte == 2) // 1 -> 8 bit displacement, 2 -> 16 bit displacement
+    {
+        // Displacement being offset from address
+        DEBUG_ASSERT(mod_byte == 1 && data.size() >= 3 || mod_byte == 2 && data.size() >= 4);
+        std::string_view reg1;
+        switch (rm_byte)
+        {
+            case 0: { reg1 = "bx + si"; break; }
+            case 1: { reg1 = "bx + di"; break; }
+            case 2: { reg1 = "bp + si"; break; }
+            case 3: { reg1 = "bp + di"; break; }
+            case 4: { reg1 = "si"; break; }
+            case 5: { reg1 = "di"; break; }
+            case 6: { reg1 = "bp"; break; }
+            case 7: { reg1 = "bx"; break; }
+        }
+        std::string_view reg0 = reg_field_to_reg_name(w_bit, reg_byte);
+        const uint16_t val2 = mod_byte == 1 ? data[2] : data[3] << 8 | data[2];
+        // Source address calc
+        auto deref_expr = val2 > 0 ? fmt::format("[{} + {}]", reg1, val2) : fmt::format("[{}]", reg1);
+        i += mod_byte == 1 ? 3 : 4;
+        return d_bit ? fmt::format("MOV {}, {}", reg0, deref_expr) : fmt::format("MOV {}, {}", deref_expr, reg0);
+    }
+
+    // mod_byte == 11
     std::string_view reg0 = reg_field_to_reg_name(w_bit, reg_byte);
     std::string_view reg1 = reg_field_to_reg_name(w_bit, rm_byte);
-    if (!d_bit)
-    {
-        std::swap(reg0, reg1);
-    }
     i += 2; // Consumed 2
-    return fmt::format("MOV {}, {}", reg0, reg1);
+    return d_bit ? fmt::format("MOV {}, {}", reg0, reg1) : fmt::format("MOV {}, {}", reg1, reg0);
 }
 
 // MOV Immediate to register
@@ -97,13 +140,13 @@ std::string process_immediate_to_register(const std::span<uint8_t> data, size_t&
     if (!w_bit)
     {
         i += 2;
-        return fmt::format("MOV {}, {}; MOV {}, {}", reg_name, data0, reg_name, static_cast<int8_t>(data0));
+        return fmt::format("MOV {}, {}", reg_name, static_cast<int8_t>(data0));
     }
     DEBUG_ASSERT(data.size() >= 2);
     const uint8_t data1 = data[2];
     uint16_t data_full = data1 << 8 | data0;
     i += 3;
-    return fmt::format("MOV {}, {}; MOV {}, {}", reg_name, data_full, reg_name, static_cast<int16_t>(data_full));
+    return fmt::format("MOV {}, {}", reg_name, static_cast<int16_t>(data_full));
 }
 
 template<class T>
@@ -134,13 +177,13 @@ auto main(int argc, char** argv) -> int
     if (debugging) {
         fmt::println("Output enabled");
     }
-    debugging = true;
     std::string file;
     if ( result.count("file") )
     {
         file = result["file"].as<std::string>();
     } else
     {
+        debugging = true;
         file = "x86_resources/listing_0039_more_movs";
     }
 
@@ -148,11 +191,12 @@ auto main(int argc, char** argv) -> int
 //  std::vector<uint8_t> full_data = read_file("x86_resources/listing_0038_many_register_mov");
     std::vector<uint8_t> full_data = read_file(file.data());
 
-    for (size_t i = 0; i < full_data.size(); i += 6)
-    {
-        const size_t length = std::min(size_t{6}, full_data.size() - i);
-        const auto data = std::span<uint8_t>{full_data.begin() + static_cast<ptrdiff_t>(i), length};
-        fmt::println("{::#010b}, i:{} -> {}", data, i, i + length);
+    if (debugging) {
+        for (size_t i = 0; i < full_data.size(); i += 6) {
+            const size_t length = std::min(size_t{6}, full_data.size() - i);
+            const auto data = std::span<uint8_t>{full_data.begin() + static_cast<ptrdiff_t>(i), length};
+            fmt::println("{::#010b}, i:{} -> {}", data, i, i + length);
+        }
     }
 
     const std::span<uint8_t> full_data_span{full_data};
@@ -163,6 +207,7 @@ auto main(int argc, char** argv) -> int
         using F = std::add_pointer_t<decltype(process_mov_reg_reg)>;
         auto arr = std::array<F, 2> { process_mov_reg_reg, process_immediate_to_register };
         const std::string output = do_worker_functions(arr, data, i);
+        const size_t bytes_consumed = i - i_before;
         if (output.empty())
         {
             const size_t bytes_not_consumed = std::min(size_t{10}, full_data.size() - i);
@@ -170,10 +215,10 @@ auto main(int argc, char** argv) -> int
             const auto next_bytes = full_data_span.subspan(i, bytes_not_consumed);
             DEBUG_ASSERT(!output.empty(), fmt::format("Index: {}, full_size: {}, {::#b}", i, full_data.size(), next_bytes));
         }
-        const size_t bytes_consumed = i - i_before;
         if (debugging) {
-            fmt::println("Consumed {}bytes, {::#010b}, i:{} -> {}", bytes_consumed, full_data_span.subspan(i_before, bytes_consumed), i_before, i);
+            fmt::println("Consumed {}bytes, {::#010b}, i:[{},{})", bytes_consumed, full_data_span.subspan(i_before, bytes_consumed), i_before, i);
         }
         fmt::println("{}", output);
+        DEBUG_ASSERT(output.size() && bytes_consumed > 0, "Did you forget to increment i or output something");
     }
 }
