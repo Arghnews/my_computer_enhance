@@ -26,10 +26,11 @@ target_compile_features(part_1_1_instruction_decode_x86_exe PRIVATE cxx_std_20)
 target_link_libraries(part_1_1_instruction_decode_x86_exe PRIVATE fmt::fmt libassert::assert)
 
 add_custom_command(TARGET part_1_1_instruction_decode_x86_exe POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/x86_resources
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+        ${CMAKE_SOURCE_DIR}/x86_resources
         $<TARGET_FILE_DIR:part_1_1_instruction_decode_x86_exe>/x86_resources
+        COMMAND ${CMAKE_SOURCE_DIR}/assemble_and_copy_nasms.sh ARGS ${CMAKE_SOURCE_DIR}/x86_resources
     )
-
 #target_link_libraries(part_1_1_instruction_decode_x86_exe PRIVATE part_1_1_instruction_decode_x86_lib)
 
 # ---- Install rules ----
